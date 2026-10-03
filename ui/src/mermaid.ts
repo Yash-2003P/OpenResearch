@@ -107,14 +107,24 @@ let renderSeq = 0;
 let configuredTheme: string | null = null;
 
 function loadRuntime(): Promise<MermaidRuntime> {
-  runtime ??= import("mermaid").then((mod) => {
-    const mermaid = mod.default as unknown as MermaidRuntime;
-    // Clearing parseError makes an unparseable diagram *throw* instead of
-    // painting mermaid's own error box into the document. The caller shows the
-    // source instead, which is more use than a red error diagram.
-    mermaid.parseError = undefined;
-    return mermaid;
-  });
+  if (!runtime) {
+    // A rejected import must not be cached: the chunk can fail to arrive for
+    // reasons that clear (a transient read error, a half-written update), and
+    // holding the rejection would leave every diagram in source fallback for
+    // the rest of the session. Clearing on failure makes the next render retry.
+    const pending = import("mermaid").then((mod) => {
+      const mermaid = mod.default as unknown as MermaidRuntime;
+      // Clearing parseError makes an unparseable diagram *throw* instead of
+      // painting mermaid's own error box into the document. The caller shows
+      // the source instead, which is more use than a red error diagram.
+      mermaid.parseError = undefined;
+      return mermaid;
+    });
+    runtime = pending;
+    void pending.catch(() => {
+      if (runtime === pending) runtime = null;
+    });
+  }
   return runtime;
 }
 

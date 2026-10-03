@@ -87,11 +87,14 @@ export function MermaidDiagram({ code }: { code: string }) {
   }, [code, theme]);
 
   // Mermaid hands interactivity back separately from the markup, so bind it to
-  // the node that is actually in the document once that markup lands.
+  // the node that is actually in the document once that markup lands. Toggling
+  // to source and back unmounts the host, so the next mount is a brand new svg
+  // carrying none of the previous handlers — hence showDiagram in the deps, not
+  // just result.
   useLayoutEffect(() => {
     const svg = hostRef.current?.querySelector("svg");
     if (svg && result?.ok) result.bindFunctions?.(svg);
-  }, [result]);
+  }, [result, showDiagram]);
 
   // A failed or still-pending render has no diagram to go back to, so the
   // toggle only appears once there is something to toggle.

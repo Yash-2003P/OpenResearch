@@ -108,3 +108,41 @@ test("a half-streamed fence that is still empty falls back without loading", () 
   assert.ok(code.properties.className.includes("language-mermaid"));
   assert.equal(mermaidHasContent(code.children[0]?.value ?? ""), false);
 });
+// The engine loader is the one piece of module state worth asserting on, because
+// caching a *failed* import would leave every diagram in source fallback for the
+// rest of the session. Transpiled with the dynamic import stubbed so the failure
+// and the retry can both be observed without a DOM.
+test("a failed engine import is not cached, so the next diagram retries", async () => {
+  const { readFileSync } = await import("node:fs");
+  const ts = (await import("typescript")).default;
+  const source = readFileSync(new URL("../src/mermaid.ts", import.meta.url), "utf8");
+  const code = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+
+  let attempts = 0;
+  const engine = { initialize() {}, render: async () => ({ svg: "<svg></svg>" }), parseError: null };
+  const document = { documentElement: { dataset: { theme: "light" } } };
+  const exports = {};
+  // `import("mermaid")` transpiles to a require of a module factory; supply one
+  // that fails on the first attempt and succeeds on the second.
+  const factory = () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("chunk load failed");
+    return { default: engine };
+  };
+  new Function("require", "exports", "document", "getComputedStyle", code)(
+    (name) => (name === "mermaid" ? factory() : require(name)),
+    exports,
+    document,
+    () => ({ fontFamily: "Inter, sans-serif" }),
+  );
+
+  const first = await exports.renderMermaid("flowchart TD\n  A-->B");
+  assert.equal(first.ok, false, "the first attempt should fail");
+  assert.match(first.error, /chunk load failed/);
+
+  const second = await exports.renderMermaid("flowchart TD\n  A-->B");
+  assert.equal(second.ok, true, `the retry should succeed, got: ${second.error}`);
+  assert.equal(attempts, 2, "a failed import must not be cached");
+});
