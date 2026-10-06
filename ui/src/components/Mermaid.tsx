@@ -21,11 +21,21 @@ const STREAM_SETTLE_MS = 150;
 
 function CopyButton({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard?.writeText(code).then(() => {
+  // A write can be refused (no permission, an unfocused document, an insecure
+  // context). Selecting the text is the fallback, so the button still does the
+  // one thing it exists for rather than silently doing nothing.
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    });
+    } catch {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(document.body);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
   };
   return (
     <IconButton
@@ -33,7 +43,7 @@ function CopyButton({ code }: { code: string }) {
       className="bg-background"
       title={m.md_copy()}
       aria-label={m.md_copy_code()}
-      onClick={copy}
+      onClick={() => void copy()}
     >
       {copied ? <Check size={13} /> : <Copy size={13} />}
     </IconButton>

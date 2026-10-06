@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
@@ -108,6 +109,27 @@ test("a half-streamed fence that is still empty falls back without loading", () 
   assert.ok(code.properties.className.includes("language-mermaid"));
   assert.equal(mermaidHasContent(code.children[0]?.value ?? ""), false);
 });
+// A diagram can carry its own `%%{init: {...}}%%` directive, and mermaid applies
+// it over the app's initialize() config unless the key is listed in `secure`.
+// htmlLabels is the one that matters: re-enabling it restores the foreignObject
+// label path, and DOMPurify permits <img src>, so an author-chosen URL would be
+// fetched when the SVG is inserted. This asserts the lock exists in source, since
+// the escape itself is only observable with a real DOM.
+test("htmlLabels is pinned in the secure list, not merely defaulted", () => {
+  const source = readFileSync(new URL("../src/mermaid.ts", import.meta.url), "utf8");
+  const block = /mermaid\.initialize\(\{[\s\S]*?\}\);/.exec(source)?.[0];
+  assert.ok(block, "expected an initialize() call");
+  assert.match(block, /htmlLabels:\s*false/, "htmlLabels must default to false");
+  const secure = /secure:\s*\[([^\]]*)\]/.exec(block);
+  assert.ok(secure, "initialize() must pass a secure list");
+  const keys = secure[1].split(",").map((k) => k.trim().replace(/^"|"$/g, ""));
+  assert.ok(
+    keys.includes("htmlLabels"),
+    `htmlLabels must be in secure so a %%{init} directive cannot re-enable it, got ${JSON.stringify(keys)}`,
+  );
+  assert.ok(keys.includes("securityLevel"), "securityLevel must stay pinned too");
+});
+
 // The engine loader is the one piece of module state worth asserting on, because
 // caching a *failed* import would leave every diagram in source fallback for the
 // rest of the session. Transpiled with the dynamic import stubbed so the failure
@@ -145,4 +167,22 @@ test("a failed engine import is not cached, so the next diagram retries", async 
   const second = await exports.renderMermaid("flowchart TD\n  A-->B");
   assert.equal(second.ok, true, `the retry should succeed, got: ${second.error}`);
   assert.equal(attempts, 2, "a failed import must not be cached");
+});
+
+// A .mmd file's Source view goes through detectSyntaxLanguageFromFilePath, which
+// hands refractor the file extension. The grammar is registered as "mermaid", so
+// without an alias the extension asks for a language that does not exist and the
+// source renders unhighlighted.
+test("a .mmd file resolves to the registered mermaid grammar", async () => {
+  const { detectSyntaxLanguageFromFilePath, resolveSyntaxLanguage } = await import(
+    "../src/syntaxLanguage.ts"
+  );
+  for (const path of ["figs/pipeline.mmd", "PLAN.MMD", "notes/diagram.mermaid"]) {
+    assert.equal(
+      detectSyntaxLanguageFromFilePath(path),
+      "mermaid",
+      `${path} must resolve to the mermaid grammar, not its raw extension`,
+    );
+  }
+  assert.equal(resolveSyntaxLanguage("mermaid"), "mermaid");
 });

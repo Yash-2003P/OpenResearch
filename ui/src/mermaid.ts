@@ -151,6 +151,14 @@ function ensureConfigured(mermaid: MermaidRuntime): void {
     securityLevel: "strict",
     suppressErrorRendering: true,
     htmlLabels: false,
+    // Keys listed here cannot be overridden by a diagram's own
+    // `%%{init: {...}}%%` directive. Without this, htmlLabels above is only a
+    // default: any .mmd file or markdown fence can set it back to true, which
+    // restores the foreignObject label path — and DOMPurify permits <img src>,
+    // so an author-chosen URL is fetched when the SVG is inserted. Verified:
+    // before this, a diagram carrying `%%{init: {"htmlLabels": true}}%%` and an
+    // <img> label did issue the request. Keep both the default and this list.
+    secure: ["htmlLabels", "securityLevel", "startOnLoad", "suppressErrorRendering", "maxTextSize", "maxEdges"],
     // mermaid defaults to ELK, whose engine is 441 kB gzip of its own — more
     // than the rest of the diagram put together. Dagre is a 16 kB chunk and
     // lays out the flowcharts, sequence and state diagrams that dominate this
