@@ -24,6 +24,37 @@ const STREAM_SETTLE_MS = 150;
  * write is refused. `fallbackRef` must point at the element holding that text:
  * selecting document.body would hand the user the whole dashboard to copy.
  */
+function copyTextFallback(text: string, target: HTMLElement | null): void {
+  // Reaching here means navigator.clipboard is unavailable (older browser,
+  // insecure context, or permission denied). Try the transient-textarea route
+  // first - it only needs the string itself, so it works even when the
+  // rendered-diagram branch has not mounted the source <pre> that
+  // `fallbackRef` points at (the ref is null in that case).
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "absolute";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  document.body.removeChild(textarea);
+  // Only fall back to dragging a document selection when the textarea route
+  // could not do the copying itself and there is a mounted source element to
+  // hand to the user.
+  if (ok || !target) return;
+  const range = document.createRange();
+  range.selectNodeContents(target);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
 function CopyButton({ code, fallbackRef }: { code: string; fallbackRef?: RefObject<HTMLElement | null> }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -32,13 +63,7 @@ function CopyButton({ code, fallbackRef }: { code: string; fallbackRef?: RefObje
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      const target = fallbackRef?.current;
-      if (!target) return;
-      const range = document.createRange();
-      range.selectNodeContents(target);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
+      copyTextFallback(code, fallbackRef?.current ?? null);
     }
   };
   return (
