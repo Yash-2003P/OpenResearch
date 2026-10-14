@@ -910,7 +910,10 @@ export function FileViewer({
               {/* A clipped file would otherwise draw as a plausible-looking but
                   partial diagram, which reads as complete. The notice is what
                   the source branch already says. */}
-              <MermaidDiagram code={data.content} />
+              {/* The editor stores its pending edits in `draft`, so render those
+                  when the diagram is dirty instead of reverting to the saved
+                  file the moment Render is pressed. */}
+              <MermaidDiagram code={dirty ? draft : (data?.content ?? "")} />
             </div>
             {data.truncated && (
               <div className="file-view-note py-2.5 px-4 text-sm text-muted">{m.file_viewer_file_truncated_showing_the_first_512_kb()}</div>
