@@ -72,7 +72,7 @@ and usually the token it choked on, which is faster than re-deriving the rule.
 
 **Dagre lays out by default, which is right for almost everything.** A graph
 dense enough that dagre's layered layout tangles — a cyclic dependency map, a
-large mesh — can ask for ELK instead, as the first line:
+large mesh — can ask for ELK instead, with an init directive on the first lines:
 
 ```
 %%{init: {"layout": "elk"}}%%
@@ -90,7 +90,7 @@ table. `collect`, `train`, `eval` are the diagram.
 
 There is no server-side validator, so read it back once:
 
-- First line names a diagram type
+- The first meaningful line (after optional blank lines and `%%` directives) names a diagram type
 - Every label with `( ) [ ] { } |` is quoted, and no label contains `"`
 - No node id is `graph`, `end`, `subgraph`, `class`, or `click`
 - Every edge references a node that exists somewhere in the block
