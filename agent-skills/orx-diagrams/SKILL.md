@@ -63,7 +63,10 @@ and usually the token it choked on, which is faster than re-deriving the rule.
    character; a literal double quote does not survive it. Use `'` or reword.
 4. **`graph`, `end`, `subgraph`, `class`, and `click` are reserved.** As a node
    id they are a parse error, not a warning. Suffix them: `end_`, `class_`,
-   `click_`.
+   `click_`. `graph`, `end`, `subgraph` and `class` break in any position.
+   `click` is narrower: it breaks as an edge *target* (`A --> click`), as an
+   edge label (`A -- click B`) and inside `style`, but `click --> B` happens to
+   parse. Suffix it anyway so the diagram survives being edited.
 5. **Labels are plain text.** HTML is escaped and shown literally, and markdown
    emphasis is not interpreted — `A["**bold**"]` shows the asterisks. Write
    emphasis out as words.
