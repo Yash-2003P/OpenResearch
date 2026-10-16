@@ -67,6 +67,7 @@ import {
   ToggleRight,
   TriangleAlert,
   Users,
+  WifiOff,
   X,
 } from "lucide-react";
 import {
@@ -143,6 +144,7 @@ import {
   withoutDuplicateTurnError,
   partIsVisible,
   pendingQuestionId,
+  hasPendingInput,
   partsTailToolId,
   streamTailIsText,
   streamTailTool,
@@ -2283,9 +2285,11 @@ function TurnStatusRow({
   recovering,
   onRecover,
   usageLimited = false,
+  temporaryApiError = false,
 }: {
   part: ChatPart;
   usageLimited?: boolean;
+  temporaryApiError?: boolean;
   busy: boolean;
   recovering: boolean;
   onRecover?: (turnId: string, action: "retry" | "continue") => void;
@@ -2317,13 +2321,14 @@ function TurnStatusRow({
   const turnId = input?.turnId;
   const label = isModelAccessLimitPart(part)
     ? m.chat_model_unavailable()
-    : usageLimited ? m.chat_session_limit_reached() : m.chat_turn_incomplete();
-  const Icon = usageLimited ? Gauge : TriangleAlert;
+    : usageLimited ? m.chat_session_limit_reached()
+    : temporaryApiError ? m.chat_panel_temporary_api_error() : m.chat_turn_incomplete();
+  const Icon = temporaryApiError ? WifiOff : usageLimited ? Gauge : TriangleAlert;
   const errorMessage = cleanToolError(part.state?.error || m.chat_turn_incomplete());
   return (
     <details className="turn-usage-limit group/limit text-base text-subtext">
       <summary className="flex w-fit max-w-full items-center gap-2 cursor-pointer list-none rounded-sm focus-visible:outline-2 focus-visible:outline-text [&::-webkit-details-marker]:hidden">
-        <Icon size={18} className="shrink-0 text-accent-red" aria-hidden="true" />
+        <Icon size={18} className={temporaryApiError ? "shrink-0 text-subtext" : "shrink-0 text-accent-red"} aria-hidden="true" />
         <span>{label}</span>
         <ChevronRight size={16} className="shrink-0 text-text transition-transform duration-120 ease-standard group-open/limit:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
       </summary>
@@ -2959,7 +2964,7 @@ function ForkControls({
   );
 }
 
-const Message = memo(function Message({
+export const Message = memo(function Message({
   message,
   activePermissionId,
   pendingTailToolId,
@@ -3064,10 +3069,14 @@ const Message = memo(function Message({
               autoFocus
               onChange={(e) => setEditDraft(e.target.value)}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+                  e.stopPropagation();
+                  return;
+                }
                 if (e.key === "Escape") {
                   e.preventDefault();
                   setEditDraft(null);
-                } else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                } else if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   submit();
                 }
@@ -3136,10 +3145,9 @@ const Message = memo(function Message({
   }
   const usageLimit = message.parts.find((part) => part.type === "tool" && isUsageLimitPart(part));
   const turnStatus = message.parts.find(isTurnStatusPart) ?? usageLimit;
-  const regularParts = withoutDuplicateTurnError(
-    message.parts.filter((part) => part !== turnStatus && !(usageLimit && isUsageLimitPart(part))),
-    turnStatus,
-  );
+  const turnParts = message.parts.filter((part) => part !== turnStatus && !(usageLimit && isUsageLimitPart(part)));
+  const regularParts = withoutDuplicateTurnError(turnParts, turnStatus);
+  const temporaryApiError = regularParts.length < turnParts.length && turnParts.at(-1)?.tool === "api_error";
   const copyText = predictTextTail && !message.completedAt ? "" : responseText(message);
   return (
     <div className="msg-assistant group/turn text-base leading-[1.62] text-text min-w-0">
@@ -3161,6 +3169,7 @@ const Message = memo(function Message({
         <TurnStatusRow
           part={turnStatus}
           usageLimited={Boolean(usageLimit)}
+          temporaryApiError={temporaryApiError}
           busy={busy}
           recovering={recoveringTurnId === turnStatus.state?.input?.turnId}
           onRecover={onRecover}
@@ -3339,6 +3348,11 @@ function renderParts(
     // resolved permission card. Without this, each invisible part splits
     // consecutive tools into single-row groups.
     if (!partIsVisible(part, activePermissionId)) continue;
+    if (part.type === "tool" && part.tool === "api_error") {
+      flushTools();
+      rendered.push(<TurnStatusRow key={part.id} part={part} busy={false} recovering={false} temporaryApiError />);
+      continue;
+    }
     // A sub-agent spawn part streams its own transcript in `children` — render
     // it as a standalone nested block, not folded into a tool run. Codex tags
     // its rows `subagent`; Claude's `Task`/`Agent` and OpenCode's `task` are
@@ -4024,7 +4038,7 @@ function SessionRow({
   active: boolean;
   unread: boolean;
   busy: boolean;
-  /** Turn held on an unanswered card: steady dot, not the working pulse. */
+  /** An actionable question or held approval needs the user's attention. */
   waiting: boolean;
   /** Nonce set while this row's freshly auto-generated title should play its
    * reveal; it doubles as the remount key so a second retitle replays it.
@@ -4122,11 +4136,16 @@ function SessionRow({
           />
         </span>
       )}
+      {waiting && !editing && (
+        <Tooltip content={m.chat_panel_waiting_for_your_input()} className="shrink-0 text-accent-amber">
+          <HelpCircle size={14} aria-hidden="true" />
+        </Tooltip>
+      )}
       <span className="session-dot">
-        {busy ? (
-          <span className={`busy-dot ${waiting ? "waiting" : ""}`} />
+        {busy && !waiting ? (
+          <span className="busy-dot" />
         ) : (
-          unread && <span className="unread-dot" />
+          unread && !waiting && <span className="unread-dot" />
         )}
       </span>
       <button
@@ -5257,29 +5276,18 @@ export function ChatPanel({
     }
   }, [queued]);
   const historyLoading = !!activeId && historyQuery.isPending;
-  // A busy turn blocked on an unanswered HELD card (nativeId — a bridge or
-  // inline mid-turn request) is waiting on the user, not the model. Drives
-  // the status line and the rail dot (the composer button is keyed on
-  // `pendingQuestion` instead — what send() can actually service). End-turn
-  // cards (no nativeId) never coexist with a busy turn of their own, so
-  // keying on nativeId avoids false positives from stale cards. (Sessions
-  // whose transcripts aren't loaded fall back to plain busy.) Memoized so the
-  // messages × parts scan stays off the per-keystroke render path.
   const waitingSessions = useMemo(() => {
     const waiting = new Set<string>();
-    for (const id of state.busySessions) {
-      if (
-        (state.messagesBySession[id] ?? []).some((m) =>
-          m.parts.some(
-            (p) => p.type === "prompt" && p.prompt && !p.prompt.resolved && p.prompt.nativeId,
-          ),
-        )
-      )
-        waiting.add(id);
+    for (const [id, messages] of Object.entries(state.messagesBySession)) {
+      const busy = state.busySessions.has(id);
+      if (hasPendingInput(activePath(messages, state.activeLeafBySession[id]), busy)) waiting.add(id);
     }
     return waiting;
-  }, [state.busySessions, state.messagesBySession]);
-  const awaitingInput = activeId ? waitingSessions.has(activeId) : false;
+  }, [state.busySessions, state.messagesBySession, state.activeLeafBySession]);
+  // Async questions can await an answer while the agent continues working.
+  const awaitingInput = busy && messages.some((message) => message.parts.some(
+    (part) => part.type === "prompt" && part.prompt && !part.prompt.resolved && part.prompt.nativeId,
+  ));
   const activeSession = openSession;
   // Nonce while the open session's title is mid-reveal; undefined = static.
   const activeTitleReveal = activeSession ? titleReveals.get(activeSession.id) : undefined;
@@ -6196,6 +6204,8 @@ export function ChatPanel({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [startNewTask, embedded]);
 
+  const sessionWaiting = (session: ChatSession) => state.messagesBySession[session.id]
+    ? waitingSessions.has(session.id) : session.awaitingInput === true;
   const sessionBusy = (project: Project, session: ChatSession) => project.id === projectId ? state.busySessions.has(session.id) : session.busy;
   const sidebarRows: SidebarRow[] = [];
   if (sidebarGrouping === "projects") shownProjects.forEach((project, index) => {
@@ -6209,7 +6219,7 @@ export function ChatPanel({
     const selected = matching.find((session) => session.id === activeId);
     if (selected && !visible.some((session) => session.id === activeId)) visible = [...visible.slice(0, chatLimit - 1), selected];
     const collapsed = collapsedProjects.includes(project.id);
-    sidebarRows.push({ kind: "project", project, collapsed, busy: collapsed && matching.some((session) => sessionBusy(project, session) && !waitingSessions.has(session.id)) });
+    sidebarRows.push({ kind: "project", project, collapsed, busy: collapsed && matching.some((session) => sessionBusy(project, session) && !sessionWaiting(session)) });
     if (collapsed) return;
     visible.forEach((session) => sidebarRows.push({ kind: "chat", project, session }));
     if (matching.length > chatLimit) sidebarRows.push({ kind: "more", project });
@@ -6365,7 +6375,7 @@ export function ChatPanel({
                       active={s.id === activeId && mainView === "chat"}
                       unread={unreadSessionIds.has(s.id)}
                       busy={sessionBusy(project, s)}
-                      waiting={waitingSessions.has(s.id)}
+                      waiting={sessionWaiting(s)}
                       revealTitle={titleReveals.get(s.id)}
                       onOpen={() => {
                         if (project.id === projectId) onActiveSessionChange(s.id);
@@ -6999,6 +7009,11 @@ export function ChatPanel({
                   composingRef.current = false;
                 }}
                 onKeyDown={(e) => {
+                  // WebKit can end composition before the confirming keydown (keyCode 229).
+                  if (composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+                    e.stopPropagation();
+                    return;
+                  }
                   if (skillMenuOpen) {
                     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                       e.preventDefault();
@@ -7019,7 +7034,7 @@ export function ChatPanel({
                       return;
                     }
                   }
-                  if (mentionMenuOpen && !e.nativeEvent.isComposing) {
+                  if (mentionMenuOpen) {
                     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                       e.preventDefault();
                       const delta = e.key === "ArrowDown" ? 1 : -1;
@@ -7050,7 +7065,7 @@ export function ChatPanel({
                     e.preventDefault();
                     return;
                   }
-                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     if (bashActive) {
                       void runShell();
